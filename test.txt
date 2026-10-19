@@ -37,3 +37,118 @@ $env:SONAR_HOST_URL = "https://your-sonarqube-url"
 $env:SONAR_TOKEN = "your-project-analysis-token"
 
 .\gradlew.bat clean build sonar --info
+
+
+
+Certificate:
+The Guidewire build progressed successfully to the `:sonar` task. The scan failed because Java does not trust the HTTPS certificate for:
+
+```text
+https://sonarqubescan.sdetools.wsib.ca
+```
+
+The important error is:
+
+```text
+certificate_unknown: The certificate chain is not trusted
+```
+
+The Gradle 9 deprecation warning is unrelated.
+
+### 1. Confirm that Java compilation completed
+
+Run:
+
+```powershell
+(Get-ChildItem .\build\classes\java\main -Recurse -Filter *.class).Count
+```
+
+If the result is greater than `0`, do not rebuild; rerun only `sonar` after fixing certificate trust.
+
+### 2. Obtain the correct certificates
+
+Export the HTTPS certificate chain for `sonarqubescan.sdetools.wsib.ca` from Edge/Chrome:
+
+1. Open the SonarQube URL.
+2. Open the site certificate.
+3. Select **Certification Path**.
+4. Export the corporate **Root CA** and each **Intermediate CA** as Base-64 X.509 `.cer` files.
+
+These are the NGINX/site TLS certificates—not the Entra ID SAML Identity Provider certificate.
+
+For example:
+
+```text
+C:\sonar-certs\wsib-root-ca.cer
+C:\sonar-certs\wsib-intermediate-ca.cer
+```
+
+### 3. Create a scanner truststore
+
+Use the same Java installation shown by:
+
+```powershell
+.\gradlew.bat --version
+```
+
+Then:
+
+```powershell
+New-Item -ItemType Directory -Force C:\sonar-certs
+
+$Keytool = "$env:JAVA_HOME\bin\keytool.exe"
+
+& $Keytool -importcert `
+  -alias wsib-root-ca `
+  -file C:\sonar-certs\wsib-root-ca.cer `
+  -keystore C:\sonar-certs\truststore.p12 `
+  -storetype PKCS12 `
+  -storepass changeit `
+  -noprompt
+
+& $Keytool -importcert `
+  -alias wsib-intermediate-ca `
+  -file C:\sonar-certs\wsib-intermediate-ca.cer `
+  -keystore C:\sonar-certs\truststore.p12 `
+  -storetype PKCS12 `
+  -storepass changeit `
+  -noprompt
+```
+
+Confirm both certificates exist:
+
+```powershell
+& $Keytool -list `
+  -keystore C:\sonar-certs\truststore.p12 `
+  -storetype PKCS12 `
+  -storepass changeit
+```
+
+SonarScanner for Gradle 7.5 supports `sonar.scanner.truststorePath` and `sonar.scanner.truststorePassword`. [Sonar Documentation](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/scanner-environment/manage-tls-certificates?utm_source=chatgpt.com)
+
+### 4. Rerun only the scan
+
+```powershell
+$env:SONAR_HOST_URL = "https://sonarqubescan.sdetools.wsib.ca"
+$env:SONAR_TOKEN = "your-analysis-token"
+
+.\gradlew.bat sonar `
+  "-Dsonar.scanner.truststorePath=C:/sonar-certs/truststore.p12" `
+  "-Dsonar.scanner.truststorePassword=changeit" `
+  --info
+```
+
+Use forward slashes in the truststore path.
+
+### Also verify NGINX centrally
+
+Ask the SonarQube/NGINX administrator to confirm that `ssl_certificate` references a full-chain file containing:
+
+```text
+Server certificate
+Intermediate certificate(s)
+```
+
+NGINX requires the server certificate first, followed by intermediates. Browsers may still work when an intermediate is missing because they can cache certificates, while Java fails. [nginx.org](https://nginx.org/en/docs/http/ngx_http_ssl_module.html?utm_source=chatgpt.com)
+
+If NGINX is corrected, validate with `nginx -t` and reload NGINX. SonarQube itself does not need to restart. If the chain is already complete but issued by an internal WSIB CA, the custom Java truststore is still required on every local machine and GitHub Actions runner.
