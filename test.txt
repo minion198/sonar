@@ -152,3 +152,61 @@ Intermediate certificate(s)
 NGINX requires the server certificate first, followed by intermediates. Browsers may still work when an intermediate is missing because they can cache certificates, while Java fails. [nginx.org](https://nginx.org/en/docs/http/ngx_http_ssl_module.html?utm_source=chatgpt.com)
 
 If NGINX is corrected, validate with `nginx -t` and reload NGINX. SonarQube itself does not need to restart. If the chain is already complete but issued by an internal WSIB CA, the custom Java truststore is still required on every local machine and GitHub Actions runner.
+
+
+
+new certificate:
+
+
+
+It is not frozen—it is waiting for you to type the password again, and PowerShell does not display password characters. However, press **Ctrl+C now**, because the screenshot shows the command was incomplete: it ran after `-alias` without the `-file` and `-keystore` arguments.
+
+There is also an earlier error:
+
+```text
+Input not an X.509 certificate
+```
+
+So validate the certificate before importing it.
+
+Run each command below as a single line—do not use backticks:
+
+```powershell
+Get-ChildItem C:\sonar-certs
+```
+
+Use the exact filename displayed. Then validate it:
+
+```powershell
+certutil -dump "C:\sonar-certs\sdetools.wsib.ca.cer"
+```
+
+If certificate details are displayed, run:
+
+```powershell
+$Keytool = "$env:JAVA_HOME\bin\keytool.exe"
+```
+
+```powershell
+& $Keytool -importcert -alias sonar-wildcard -file "C:\sonar-certs\sdetools.wsib.ca.cer" -keystore "C:\sonar-certs\truststore.p12" -storetype PKCS12 -storepass changeit -noprompt
+```
+
+Expected output:
+
+```text
+Certificate was added to keystore
+```
+
+Then verify:
+
+```powershell
+& $Keytool -list -keystore "C:\sonar-certs\truststore.p12" -storetype PKCS12 -storepass changeit
+```
+
+If `certutil -dump` or `keytool` still says the input is not an X.509 certificate, re-export the certificate using:
+
+```text
+Base-64 encoded X.509 (.CER)
+```
+
+Do not export it as PKCS #7/P7B or as a certificate request. Also ensure the command uses the real filename—Windows cannot retain `*` in the wildcard certificate’s filename, so it may have been saved with a different name.
