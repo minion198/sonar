@@ -1,0 +1,158 @@
+name: SQL Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options:
+          - dev
+          - dit
+          - sit
+          - bat
+          - ppd
+          - prod
+        default: dev
+
+      deploy:
+        description: Publish changes after generating deployment report
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: database-${{ inputs.environment }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  sql-deployment:
+    name: SQL - ${{ inputs.environment }}
+    runs-on: [self-hosted, Windows, X64]
+
+    # Configure approvals and secrets in GitHub Environments.
+    environment: ${{ inputs.environment }}
+
+    timeout-minutes: 45
+
+    env:
+      SQL_PROJECT: meta/adf-mdda-sql.sqlproj
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate branch and runner tools
+        id: tools
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if ($env:GITHUB_REF -ne 'refs/heads/main') {
+            throw 'Run SQL deployment from the main branch.'
+          }
+
+          if (-not (Test-Path -LiteralPath $env:SQL_PROJECT)) {
+            throw "SQL project not found: $env:SQL_PROJECT"
+          }
+
+          Get-Command dotnet -ErrorAction Stop | Out-Null
+
+          $sqlPackage = Get-Command SqlPackage -ErrorAction Stop
+          "sqlpackage=$($sqlPackage.Source)" >> $env:GITHUB_OUTPUT
+
+          dotnet --version
+          if ($LASTEXITCODE -ne 0) {
+            throw '.NET SDK validation failed.'
+          }
+
+      - name: Build SQL project
+        id: build
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $output = Join-Path $env:RUNNER_TEMP `
+            "sql-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+
+          New-Item -ItemType Directory -Path $output -Force |
+            Out-Null
+
+          dotnet build "$env:SQL_PROJECT" `
+            --configuration Release `
+            --output "$output"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw 'SQL project build failed.'
+          }
+
+          $dacpacs = @(
+            Get-ChildItem -LiteralPath $output -Filter '*.dacpac'
+          )
+
+          if ($dacpacs.Count -ne 1) {
+            throw "Expected one DACPAC; found $($dacpacs.Count)."
+          }
+
+          "dacpac=$($dacpacs[0].FullName)" >> $env:GITHUB_OUTPUT
+
+          New-Item -ItemType Directory -Path out -Force |
+            Out-Null
+
+      - name: Generate deployment report
+        uses: azure/sql-action@v2.3
+        with:
+          connection-string: ${{ secrets.AZURE_SQL_CONNECTION_STRING }}
+          path: ${{ steps.build.outputs.dacpac }}
+          action: DeployReport
+          sqlpackage-path: ${{ steps.tools.outputs.sqlpackage }}
+          skip-firewall-check: true
+          arguments: >-
+            /OutputPath:"${{ github.workspace }}/out/deploy-report.xml"
+            /p:BlockOnPossibleDataLoss=True
+            /p:DropObjectsNotInSource=False
+            /p:IgnorePermissions=True
+            /p:IgnoreRoleMembership=True
+            /p:ExcludeObjectTypes=Users;Logins;RoleMembership;Permissions
+
+      - name: Publish SQL schema
+        if: inputs.deploy
+        uses: azure/sql-action@v2.3
+        with:
+          connection-string: ${{ secrets.AZURE_SQL_CONNECTION_STRING }}
+          path: ${{ steps.build.outputs.dacpac }}
+          action: Publish
+          sqlpackage-path: ${{ steps.tools.outputs.sqlpackage }}
+          skip-firewall-check: true
+          arguments: >-
+            /p:BlockOnPossibleDataLoss=True
+            /p:DropObjectsNotInSource=False
+            /p:IgnorePermissions=True
+            /p:IgnoreRoleMembership=True
+            /p:ExcludeObjectTypes=Users;Logins;RoleMembership;Permissions
+            /p:CommandTimeout=300
+            /p:DatabaseLockTimeout=60
+
+      - name: Upload deployment report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: sql-report-${{ inputs.environment }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: out/deploy-report.xml
+          if-no-files-found: warn
+          retention-days: 30
+
+
+
+
+=-----------------------
+
+Server=tcp:<server>.database.windows.net,1433;Initial Catalog=<database>;Authentication=Active Directory Service Principal;User ID=<SPN-client-ID>;Password="<SPN-client-secret>";Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;
