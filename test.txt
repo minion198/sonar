@@ -1,3 +1,4 @@
+1. 
 Get-ChildItem .\src -Directory -Recurse |
     Select-Object FullName
 
@@ -5,8 +6,34 @@ Get-ChildItem .\src -Directory -Recurse |
 
 Select-String -Path .\build.gradle `
     -Pattern "java|camel|guidewire|sourceCompatibility|toolchain|org.sonarqube"
-
+2.
 Select-String -Path .\build.gradle,.\gradle.properties `
     -Pattern "org\.sonarqube|sonar\s*\{|sonar\."
 
 .\gradlew.bat tasks --all | Select-String "sonar"
+
+
+3.
+plugins {
+    id "org.sonarqube" version "7.5.0.8588"
+}
+
+sonar {
+    properties {
+        property "sonar.projectKey", "guidewire-ig-apps"
+        property "sonar.projectName", "Guidewire IG Apps"
+        property "sonar.sourceEncoding", "UTF-8"
+
+        property "sonar.exclusions",
+            "**/build/**," +
+            "**/.gradle/**," +
+            "**/generated/**"
+    }
+}
+
+4. Run Scan
+
+$env:SONAR_HOST_URL = "https://your-sonarqube-url"
+$env:SONAR_TOKEN = "your-project-analysis-token"
+
+.\gradlew.bat clean build sonar --info
