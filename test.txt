@@ -1,1 +1,12 @@
+Get-ChildItem .\src -Directory -Recurse |
+    Select-Object FullName
 
+
+
+Select-String -Path .\build.gradle `
+    -Pattern "java|camel|guidewire|sourceCompatibility|toolchain|org.sonarqube"
+
+Select-String -Path .\build.gradle,.\gradle.properties `
+    -Pattern "org\.sonarqube|sonar\s*\{|sonar\."
+
+.\gradlew.bat tasks --all | Select-String "sonar"
