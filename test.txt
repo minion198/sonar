@@ -210,3 +210,9 @@ Base-64 encoded X.509 (.CER)
 ```
 
 Do not export it as PKCS #7/P7B or as a certificate request. Also ensure the command uses the real filename—Windows cannot retain `*` in the wildcard certificate’s filename, so it may have been saved with a different name.
+
+
+
+---------------------------------
+
+.\gradlew.bat sonar "-Dsonar.scanner.truststorePath=C:/sonar-certs/truststore.p12" "-Dsonar.scanner.truststorePassword=changeit" --info
