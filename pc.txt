@@ -1,0 +1,199 @@
+Since this is Guidewire PolicyCenter, start with a Gosu-only scan of `modules\configuration`. This does not require building PolicyCenter. Native SonarQube 2026.4 Enterprise analyzes `.gs`, `.gsx`, and `.gsp` files. [SonarQube Server 2026.4](https://docs.sonarsource.com/sonarqube-server/2026.4/analyzing-source-code/languages/gosu?utm_source=chatgpt.com)
+
+Do not move the repository to the SonarQube server. Scan it from your PC first.
+
+## 1. Extract and open the repository
+
+Make sure you are not running from inside a ZIP:
+
+```powershell
+Set-Location "C:\path\to\extracted-gwpc-repository"
+```
+
+Confirm the expected files:
+
+```powershell
+Get-ChildItem
+Get-ChildItem .\modules -Directory
+```
+
+You should see items such as:
+
+```text
+build.gradle
+settings.gradle
+gwb
+gwb.bat
+modules
+```
+
+## 2. Inventory the PolicyCenter source
+
+Run:
+
+```powershell
+Get-ChildItem .\modules\configuration -Recurse -File |
+    Where-Object {
+        $_.Extension -in '.gs','.gsx','.gsp','.gst','.pcf',
+                          '.java','.xml','.js','.ts','.json'
+    } |
+    Group-Object Extension |
+    Sort-Object Count -Descending |
+    Select-Object Count, Name
+```
+
+Sonar’s native Gosu analyzer currently recognizes:
+
+```text
+.gs
+.gsx
+.gsp
+```
+
+Do not include `.gst` or `.pcf` in the initial Gosu scan because they are not documented Gosu suffixes.
+
+## 3. Create a temporary SonarQube project
+
+In SonarQube:
+
+1. Select **Projects → Create project → Manually**.
+2. Project name: `Guidewire PolicyCenter Gosu POC`
+3. Project key: `gwpc-gosu-poc`
+4. Generate a project analysis token.
+5. Copy the token temporarily.
+
+Use a separate POC project initially so you can adjust exclusions without affecting an existing project.
+
+## 4. Install or verify SonarScanner CLI
+
+PolicyCenter’s Guidewire Gradle wrapper does not need to be used for this Gosu-only scan.
+
+Run:
+
+```powershell
+sonar-scanner.bat -v
+```
+
+If the command is unavailable, install the approved Windows x64 SonarScanner CLI and add its `bin` folder to `PATH`. Sonar’s documented CLI setup uses a `sonar-project.properties` file in the repository root. [Sonar Documentation](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner?utm_source=chatgpt.com)
+
+## 5. Create `sonar-project.properties`
+
+At the GWPC repository root, create:
+
+```properties
+sonar.projectKey=gwpc-gosu-poc
+sonar.projectName=Guidewire PolicyCenter Gosu POC
+
+# Scan customer configuration code, not the entire Guidewire distribution
+sonar.sources=modules/configuration
+
+# Initial Gosu-only validation
+sonar.inclusions=**/*.gs,**/*.gsx,**/*.gsp
+
+sonar.exclusions=**/build/**,**/.gradle/**,**/generated/**,**/tmp/**,**/node_modules/**
+
+sonar.sourceEncoding=UTF-8
+
+# Use this for a downloaded repository without .git
+sonar.scm.disabled=true
+```
+
+Do not put the Sonar token in this file.
+
+## 6. Configure the connection and certificate
+
+Reuse the same URL, token method and truststore that worked for the IG scan:
+
+```powershell
+$env:SONAR_HOST_URL = "https://sonarqubescan.sdetools.wsib.ca"
+$env:SONAR_TOKEN = "your-gwpc-project-token"
+$env:SONAR_SCANNER_JAVA_OPTS = "-Xmx2g"
+```
+
+Run:
+
+```powershell
+sonar-scanner.bat "-Dsonar.scanner.truststorePath=C:/sonar-certs/truststore.p12" "-Dsonar.scanner.truststorePassword=changeit"
+```
+
+The token should be provided through `SONAR_TOKEN`, not stored in source control. [Sonar Documentation](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/analysis-parameters/parameters-not-settable-in-ui?utm_source=chatgpt.com)
+
+## 7. Validate the result
+
+A successful scanner message alone is insufficient. In SonarQube verify:
+
+- The log contains a Gosu sensor.
+- **Gosu** appears under the project’s language distribution.
+- Gosu lines of code are greater than zero.
+- `.gs` or `.gsx` files appear under **Code**.
+- The file paths are primarily under `modules/configuration`.
+- The project has a Gosu quality profile.
+- Gosu issues are displayed, if detected.
+
+Also review the scanner summary:
+
+```text
+ANALYSIS SUCCESSFUL
+EXECUTION SUCCESS
+```
+
+If the scan succeeds but Gosu LOC is zero, inspect the inclusion patterns and confirm the files are really beneath `modules\configuration`.
+
+## 8. Expand to a multi-language configuration scan
+
+After the Gosu scan works, remove `sonar.inclusions` and temporarily exclude Java:
+
+```properties
+sonar.projectKey=gwpc-gosu-poc
+sonar.projectName=Guidewire PolicyCenter Configuration
+
+sonar.sources=modules/configuration
+
+sonar.exclusions=**/*.java,**/build/**,**/.gradle/**,**/generated/**,**/tmp/**,**/node_modules/**
+
+sonar.sourceEncoding=UTF-8
+sonar.scm.disabled=true
+```
+
+This allows SonarQube to detect supported Gosu, XML, JavaScript, JSON and other files while avoiding Java bytecode errors.
+
+Run the same `sonar-scanner.bat` command again.
+
+## 9. Add Java only if required
+
+If you include `.java` files, Sonar requires compiled `.class` files whenever the project has more than one Java source file. [SonarQube Server 2026.4](https://docs.sonarsource.com/sonarqube-server/2026.4/analyzing-source-code/languages/java?utm_source=chatgpt.com)
+
+First discover the PolicyCenter build tasks:
+
+```powershell
+.\gwb.bat tasks --all | Select-String "compile|classes|sonar"
+```
+
+Use your team’s supported Guidewire compilation task, then locate the output:
+
+```powershell
+Get-ChildItem . -Recurse -Filter *.class |
+    Group-Object DirectoryName |
+    Sort-Object Count -Descending |
+    Select-Object -First 20 Count, Name
+```
+
+Only then add appropriate paths, for example:
+
+```properties
+sonar.java.binaries=path/to/compiled/classes
+sonar.java.libraries=path/to/libraries/**/*.jar
+```
+
+Do not use `sonar.java.binaries=.` or another dummy path.
+
+### Recommended rollout
+
+| Phase | Scope | Build required |
+|---|---|---:|
+| 1 | `.gs`, `.gsx`, `.gsp` under `modules/configuration` | No |
+| 2 | Gosu plus supported configuration formats | No |
+| 3 | Java source | Yes, compiled classes required |
+| 4 | GHES Actions self-hosted runner | Same validated configuration |
+
+Start with Phase 1. It gives the cleanest proof that the 2026.4 native Gosu analyzer is working before Java compilation or the full Guidewire distribution complicates the scan.
