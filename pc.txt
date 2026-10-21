@@ -197,3 +197,97 @@ Do not use `sonar.java.binaries=.` or another dummy path.
 | 4 | GHES Actions self-hosted runner | Same validated configuration |
 
 Start with Phase 1. It gives the cleanest proof that the 2026.4 native Gosu analyzer is working before Java compilation or the full Guidewire distribution complicates the scan.
+
+
+
+----------------------------------------------------------------------------------------------------
+The error is expected: you installed **SonarQube CLI (`sonar.exe`)**, but you are trying to run **SonarScanner CLI (`sonar-scanner.bat`)**. They are separate products. Opening a new terminal would enable `sonar.exe`, but it will not provide `sonar-scanner.bat`. [docs.sonarsource.com](https://docs.sonarsource.com/sonarqube-cli/quickstart-guide?utm_source=chatgpt.com)
+
+### Install the correct scanner
+
+1. Download [SonarScanner CLI 8.1 for Windows x64](https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-8.1.0.6389-windows-x64.zip). This is the current package listed by SonarSource. [docs.sonarsource.com](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner?utm_source=chatgpt.com)
+
+2. Extract it, for example to:
+
+```text
+C:\Users\pedapatb\AppData\Local\SonarScanner
+```
+
+3. In PowerShell, adjust the path if the extracted directory differs:
+
+```powershell
+$ScannerHome = "$env:LOCALAPPDATA\SonarScanner\sonar-scanner-8.1.0.6389-windows-x64"
+
+Test-Path "$ScannerHome\bin\sonar-scanner.bat"
+
+& "$ScannerHome\bin\sonar-scanner.bat" -v
+```
+
+`Test-Path` must return `True`, followed by the scanner version.
+
+To use the short command in the current window:
+
+```powershell
+$env:Path = "$ScannerHome\bin;$env:Path"
+
+sonar-scanner.bat -v
+```
+
+You can leave the previously installed `sonar.exe`; it does not interfere.
+
+### Run the GWPC Gosu smoke scan
+
+From the GWPC root:
+
+```powershell
+Set-Location C:\3PC
+
+Test-Path .\modules\configuration
+```
+
+Create `C:\3PC\sonar-project.properties`:
+
+```properties
+sonar.projectKey=gwpc-gosu-poc
+sonar.projectName=GWPC Gosu POC
+
+sonar.sources=modules/configuration
+sonar.inclusions=**/*.gs,**/*.gsx,**/*.gsp
+
+sonar.exclusions=**/build/**,**/.gradle/**,**/generated/**,**/tmp/**,**/node_modules/**
+sonar.sourceEncoding=UTF-8
+sonar.scm.disabled=true
+```
+
+Set the connection information:
+
+```powershell
+$env:SONAR_HOST_URL = "https://sonarqubescan.sdetools.wsib.ca"
+
+$secureToken = Read-Host "Enter SonarQube project token" -AsSecureString
+$env:SONAR_TOKEN = [Net.NetworkCredential]::new("", $secureToken).Password
+```
+
+If this computer has the same PKCS12 truststore created earlier:
+
+```powershell
+& "$ScannerHome\bin\sonar-scanner.bat" `
+  "-Dsonar.scanner.truststorePath=C:/sonar-certs/truststore.p12" `
+  "-Dsonar.scanner.truststorePassword=changeit"
+```
+
+Otherwise run:
+
+```powershell
+& "$ScannerHome\bin\sonar-scanner.bat"
+```
+
+The successful result ends with:
+
+```text
+EXECUTION SUCCESS
+```
+
+Then confirm that the project dashboard shows Gosu, Gosu LOC greater than zero, and `.gs`/`.gsx` files under **Code**.
+
+This standalone approach is appropriate for the initial Gosu-only, no-build smoke test. For the eventual complete Gradle-based GWPC analysis, Sonar recommends SonarScanner for Gradle because it supplies build information that the standalone scanner lacks. [docs.sonarsource.com](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner?utm_source=chatgpt.com)
